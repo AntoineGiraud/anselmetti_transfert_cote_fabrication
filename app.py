@@ -1,3 +1,4 @@
+import tempfile
 import networkx as nx
 import pandas as pd
 import streamlit as st
@@ -7,63 +8,99 @@ from pyvis.network import Network
 
 
 # ==========================================
-# 1. Moteur Data (DuckDB)
+# 1. Initialisation des données (Session State)
 # ==========================================
-@st.cache_resource
-def init_db():
-    conn = duckdb.connect(database=":memory:")
+def init_data():
+    if "df_ressources" not in st.session_state:
+        st.session_state.df_ressources = pd.DataFrame(
+            [
+                {
+                    "id_ressource": "Moulage_Sable",
+                    "type": "Fonderie",
+                    "it_machine": 0.8,
+                    "it_outil": 0.0,
+                },
+                {
+                    "id_ressource": "Tour_Ebauche",
+                    "type": "Tournage",
+                    "it_machine": 0.1,
+                    "it_outil": 0.05,
+                },
+                {
+                    "id_ressource": "Tour_Finition",
+                    "type": "Tournage",
+                    "it_machine": 0.02,
+                    "it_outil": 0.01,
+                },
+                {
+                    "id_ressource": "Fraiseuse_Chanfrein",
+                    "type": "Fraisage",
+                    "it_machine": 0.05,
+                    "it_outil": 0.02,
+                },
+            ]
+        )
 
-    # Table des Ressources (Machines & Outils)
-    conn.execute("""
-        CREATE TABLE ressources (
-            id_ressource VARCHAR PRIMARY KEY,
-            type VARCHAR,
-            it_machine DOUBLE,
-            it_outil DOUBLE
-        );
+    if "df_gamme" not in st.session_state:
+        st.session_state.df_gamme = pd.DataFrame(
+            [
+                {
+                    "id_cf": "CF_Brut_G",
+                    "surf_dep": "S_Brut_Gauche",
+                    "surf_arr": "Plan_Symetrie",
+                    "id_ressource": "Moulage_Sable",
+                    "nominale": 10.0,
+                },
+                {
+                    "id_cf": "CF_Brut_D",
+                    "surf_dep": "Plan_Symetrie",
+                    "surf_arr": "S_Brut_Droite",
+                    "id_ressource": "Moulage_Sable",
+                    "nominale": 10.0,
+                },
+                {
+                    "id_cf": "CF_Tour_Eb",
+                    "surf_dep": "Plan_Symetrie",
+                    "surf_arr": "S_Ext_Ebauche",
+                    "id_ressource": "Tour_Ebauche",
+                    "nominale": 151.0,
+                },
+                {
+                    "id_cf": "CF_Tour_Fin",
+                    "surf_dep": "S_Ext_Ebauche",
+                    "surf_arr": "S_Ext_Fini",
+                    "id_ressource": "Tour_Finition",
+                    "nominale": 150.0,
+                },
+                {
+                    "id_cf": "CF_Chanfrein",
+                    "surf_dep": "S_Ext_Fini",
+                    "surf_arr": "S_Chanfrein",
+                    "id_ressource": "Fraiseuse_Chanfrein",
+                    "nominale": 2.0,
+                },
+            ]
+        )
 
-        INSERT INTO ressources VALUES
-            ('Moulage_Sable', 'Fonderie', 0.8, 0.0),
-            ('Tour_Ebauche', 'Tournage', 0.1, 0.05),
-            ('Tour_Finition', 'Tournage', 0.02, 0.01),
-            ('Fraiseuse_Chanfrein', 'Fraisage', 0.05, 0.02);
-    """)
-
-    # Table de la Gamme (Cotes de Fabrication)
-    conn.execute("""
-        CREATE TABLE gamme_usinage (
-            id_cf VARCHAR PRIMARY KEY,
-            surf_dep VARCHAR,
-            surf_arr VARCHAR,
-            id_ressource VARCHAR,
-            nominale DOUBLE,
-            FOREIGN KEY(id_ressource) REFERENCES ressources(id_ressource)
-        );
-
-        -- Cas : Flasque ronde moulée (ep: 20mm, dia: 300mm), avec reprise chanfrein
-        INSERT INTO gamme_usinage VALUES
-            ('CF_Brut_G', 'S_Brut_Gauche', 'Plan_Symetrie', 'Moulage_Sable', 10.0),
-            ('CF_Brut_D', 'Plan_Symetrie', 'S_Brut_Droite', 'Moulage_Sable', 10.0),
-            ('CF_Tour_Eb', 'Plan_Symetrie', 'S_Ext_Ebauche', 'Tour_Ebauche', 151.0),
-            ('CF_Tour_Fin', 'S_Ext_Ebauche', 'S_Ext_Fini', 'Tour_Finition', 150.0),
-            ('CF_Chanfrein', 'S_Ext_Fini', 'S_Chanfrein', 'Fraiseuse_Chanfrein', 2.0);
-    """)
-
-    # Vue analytique : Jointure et calcul dynamique de l'IT
-    conn.execute("""
-        CREATE VIEW v_cotes_fabrication AS
-        SELECT
-            g.id_cf as id,
-            g.surf_dep,
-            g.surf_arr,
-            g.nominale,
-            g.id_ressource,
-            (r.it_machine + r.it_outil) AS it_calcule
-        FROM gamme_usinage g
-        JOIN ressources r ON g.id_ressource = r.id_ressource;
-    """)
-
-    return conn
+    if "df_client" not in st.session_state:
+        st.session_state.df_client = pd.DataFrame(
+            [
+                {
+                    "id_cc": "CC1_Largeur_Totale",
+                    "surf_A": "S_Chanfrein",
+                    "surf_B": "S_Brut_Gauche",
+                    "nominale_cible": 140.0,
+                    "it_max": 1.0,
+                },
+                {
+                    "id_cc": "CC2_Symetrie_Fini",
+                    "surf_A": "S_Ext_Fini",
+                    "surf_B": "Plan_Symetrie",
+                    "nominale_cible": 150.0,
+                    "it_max": 0.1,
+                },
+            ]
+        )
 
 
 # ==========================================
@@ -72,23 +109,25 @@ def init_db():
 def build_graph(df_cf: pd.DataFrame) -> nx.Graph:
     G = nx.Graph()
     for _, row in df_cf.iterrows():
-        # L'IT utilisé est désormais celui calculé par SQL
-        G.add_edge(
-            row["surf_dep"], row["surf_arr"], label=row["id"], it=row["it_calcule"]
-        )
+        # En cas d'erreur de frappe sur la ressource, on sécurise avec un IT par défaut à 99
+        it_val = row["it_calcule"] if pd.notna(row["it_calcule"]) else 99.9
+        G.add_edge(row["surf_dep"], row["surf_arr"], label=row["id"], it=it_val)
     return G
 
 
 def get_pyvis_html(G: nx.Graph) -> str:
-    net = Network(height="400px", width="100%", bgcolor="#222222", font_color="white")
+    net = Network(height="450px", width="100%", bgcolor="#222222", font_color="white")
     net.from_nx(G)
-    # Mise en évidence du plan de symétrie (nœud virtuel)
     for node in net.nodes:
         if "Symetrie" in node["id"]:
             node["color"] = "#ff4b4b"
             node["shape"] = "diamond"
             node["size"] = 25
-    return net.generate_html()
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp_file:
+        net.save_graph(tmp_file.name)
+        with open(tmp_file.name, "r", encoding="utf-8") as f:
+            return f.read()
 
 
 def analyze_chain(G: nx.Graph, surf_A: str, surf_B: str):
@@ -101,64 +140,115 @@ def analyze_chain(G: nx.Graph, surf_A: str, surf_B: str):
             f"{G.get_edge_data(path[i], path[i + 1])['label']} ({G.get_edge_data(path[i], path[i + 1])['it']}mm)"
             for i in range(len(path) - 1)
         ]
-        return {"success": True, "path": path, "sum_it": sum_it, "links": links}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {
+            "success": True,
+            "path": path,
+            "sum_it": round(sum_it, 4),
+            "links": links,
+        }
+    except nx.NetworkXNoPath:
+        return {
+            "success": False,
+            "error": "Rupture de chaîne : aucun lien continu entre ces surfaces.",
+        }
+    except nx.NodeNotFound as e:
+        return {"success": False, "error": f"Surface {e} introuvable dans la gamme."}
 
 
 # ==========================================
 # 3. Interface Streamlit
 # ==========================================
-st.set_page_config(page_title="Anselmetti DB Engine", layout="wide")
-conn = init_db()
+st.set_page_config(page_title="Anselmetti Studio", layout="wide")
+init_data()
 
-st.title("⚙️ Moteur de Transfert Anselmetti (DuckDB Powered)")
+st.title("⚙️ Anselmetti Studio : Transfert de Cotes")
 
-# Récupération des tables via SQL
-df_ressources = conn.execute("SELECT * FROM ressources").df()
-df_cf_dynamique = conn.execute("SELECT * FROM v_cotes_fabrication").df()
+# -- ZONE D'ÉDITION DES DONNÉES --
+st.header("1. Paramétrage (Édition libre)")
+tab1, tab2, tab3 = st.tabs(
+    [
+        "🏭 Ressources (Machines/Outils)",
+        "📋 Gamme d'Usinage (Cotes Fab)",
+        "🎯 Cotes Client (Besoins)",
+    ]
+)
 
-col1, col2 = st.columns(2)
-with col1:
-    st.subheader("🏭 Parc Machines & Outils (Ressources)")
-    st.dataframe(df_ressources, use_container_width=True, hide_index=True)
+with tab1:
+    res_edited = st.data_editor(
+        st.session_state.df_ressources,
+        num_rows="dynamic",
+        key="ed_res",
+        use_container_width=True,
+    )
+with tab2:
+    gamme_edited = st.data_editor(
+        st.session_state.df_gamme,
+        num_rows="dynamic",
+        key="ed_gamme",
+        use_container_width=True,
+    )
+with tab3:
+    client_edited = st.data_editor(
+        st.session_state.df_client,
+        num_rows="dynamic",
+        key="ed_client",
+        use_container_width=True,
+    )
 
-with col2:
-    st.subheader("📋 Gamme d'Usinage (IT calculé via vue SQL)")
-    st.dataframe(df_cf_dynamique, use_container_width=True, hide_index=True)
+# -- CALCUL DUCKDB A LA VOLÉE --
+# DuckDB lit directement les variables res_edited et gamme_edited
+query = """
+    SELECT
+        g.id_cf as id,
+        g.surf_dep,
+        g.surf_arr,
+        g.nominale,
+        g.id_ressource,
+        (r.it_machine + r.it_outil) AS it_calcule
+    FROM gamme_edited g
+    LEFT JOIN res_edited r ON g.id_ressource = r.id_ressource
+"""
+df_cf_dynamique = duckdb.query(query).df()
 
 st.divider()
 
+# -- ZONE D'ANALYSE --
+st.header("2. Analyse & Validation")
 G = build_graph(df_cf_dynamique)
-col_graph, col_analysis = st.columns(2)
+col_graph, col_analysis = st.columns([1, 1.2])
 
 with col_graph:
-    st.subheader("🕸️ Graphe de liaison (Plan de symétrie en rouge)")
-    components.html(get_pyvis_html(G), height=410)
+    st.subheader("🕸️ Graphe de liaison")
+    if G.number_of_nodes() > 0:
+        components.html(get_pyvis_html(G), height=460)
+    else:
+        st.info("Graphe vide. Ajoutez des cotes de fabrication.")
 
 with col_analysis:
-    st.subheader("🎯 Vérification Besoin Client")
-    st.write(
-        "Test : Respect de la distance entre le Chanfrein et le Brut opposé (Ex: IT max = 1.0mm)"
-    )
+    st.subheader("🔍 Contrôle des Cotes Client")
 
-    # Simulation d'une requête client
-    surf_client_A = "S_Chanfrein"
-    surf_client_B = "S_Brut_Gauche"
-    it_client_max = 1.0
+    for _, cc_row in client_edited.iterrows():
+        with st.expander(
+            f"Analyse : {cc_row['id_cc']} ({cc_row['surf_A']} ➔ {cc_row['surf_B']})",
+            expanded=True,
+        ):
+            it_max = float(cc_row["it_max"])
+            result = analyze_chain(G, cc_row["surf_A"], cc_row["surf_B"])
 
-    result = analyze_chain(G, surf_client_A, surf_client_B)
+            if result["success"]:
+                st.markdown(f"**Chemin :** `{' ➔ '.join(result['path'])}`")
+                st.caption(f"**Opérations :** {' + '.join(result['links'])}")
 
-    if result["success"]:
-        st.write("🛣️ **Chemin :** " + " ➔ ".join(result["path"]))
-        st.write("🔗 **Opérations :** " + " + ".join(result["links"]))
+                it_calc = result["sum_it"]
+                delta = round(it_max - it_calc, 4)
 
-        delta = round(it_client_max - result["sum_it"], 3)
-        if result["sum_it"] <= it_client_max:
-            st.success(
-                f"✅ **VALIDE** : IT Cumulé ({result['sum_it']} mm) <= IT Max ({it_client_max} mm). Marge : {delta}mm"
-            )
-        else:
-            st.error(
-                f"❌ **INVALIDE** : IT Cumulé ({result['sum_it']} mm) > IT Max ({it_client_max} mm)."
-            )
+                if it_calc <= it_max:
+                    st.success(
+                        f"✅ **VALIDE** | IT Cumulé: **{it_calc} mm** (Max: {it_max} mm) | Marge: {delta} mm"
+                    )
+                else:
+                    st.error(
+                        f"❌ **INVALIDE** | IT Cumulé: **{it_calc} mm** (Max: {it_max} mm) | Dépassement: {abs(delta)} mm"
+                    )
+            else:
+                st.warning(f"⚠️ {result['error']}")
