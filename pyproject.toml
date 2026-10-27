@@ -1,0 +1,22 @@
+[project]
+name = "anselmetti-app"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "AntoineGiraud", email = "antoine.giraud@outlook.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "networkx>=3.7",
+    "pandas>=3.1.0",
+    "pyvis>=0.3.2",
+    "streamlit>=1.66.1",
+]
+
+[project.scripts]
+anselmetti-app = "anselmetti_app:main"
+
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14.0"]
+build-backend = "uv_build"
