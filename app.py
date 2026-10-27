@@ -1,10 +1,7 @@
-import tempfile
 import networkx as nx
 import pandas as pd
 import streamlit as st
 import duckdb
-import streamlit.components.v1 as components
-from pyvis.network import Network
 
 
 # ==========================================
@@ -104,30 +101,14 @@ def init_data():
 
 
 # ==========================================
-# 2. Logique Graphe & Analyse
+# 2. Moteur Graphe & Mermaid
 # ==========================================
 def build_graph(df_cf: pd.DataFrame) -> nx.Graph:
     G = nx.Graph()
     for _, row in df_cf.iterrows():
-        # En cas d'erreur de frappe sur la ressource, on sécurise avec un IT par défaut à 99
         it_val = row["it_calcule"] if pd.notna(row["it_calcule"]) else 99.9
         G.add_edge(row["surf_dep"], row["surf_arr"], label=row["id"], it=it_val)
     return G
-
-
-def get_pyvis_html(G: nx.Graph) -> str:
-    net = Network(height="450px", width="100%", bgcolor="#222222", font_color="white")
-    net.from_nx(G)
-    for node in net.nodes:
-        if "Symetrie" in node["id"]:
-            node["color"] = "#ff4b4b"
-            node["shape"] = "diamond"
-            node["size"] = 25
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp_file:
-        net.save_graph(tmp_file.name)
-        with open(tmp_file.name, "r", encoding="utf-8") as f:
-            return f.read()
 
 
 def analyze_chain(G: nx.Graph, surf_A: str, surf_B: str):
@@ -152,7 +133,64 @@ def analyze_chain(G: nx.Graph, surf_A: str, surf_B: str):
             "error": "Rupture de chaîne : aucun lien continu entre ces surfaces.",
         }
     except nx.NodeNotFound as e:
-        return {"success": False, "error": f"Surface {e} introuvable dans la gamme."}
+        return {"success": False, "error": f"Surface {e} introuvable."}
+
+
+def get_mermaid_flowchart(G: nx.Graph, critical_path: list = None) -> str:
+    """Génère le graphe Anselmetti avec coloration du chemin de cotes."""
+    lines = ["graph BT"]
+
+    # Définition des noeuds (Sécurisés avec des guillemets "")
+    for node in G.nodes():
+        if "Symetrie" in str(node):
+            # En f-string Python, {{ devient { pour générer le losange Mermaid
+            lines.append(f'    {node}{{"{node}"}}')
+            lines.append(
+                f"    style {node} fill:#ff4b4b,color:#fff,stroke:#333,stroke-width:2px"
+            )
+        else:
+            lines.append(f'    {node}["{node}"]')
+
+    # Définition des arêtes
+    edges_list = list(G.edges(data=True))
+    for i, (u, v, data) in enumerate(edges_list):
+        label = f"{data['label']} (IT: {data['it']:.3g}mm)"
+
+        # Syntaxe Mermaid robuste : A -- "texte" --- B
+        lines.append(f'    {u} -- "{label}" --- {v}')
+
+        # Coloration du chemin trouvé en rouge
+        if critical_path:
+            is_in_path = any(
+                (u == critical_path[j] and v == critical_path[j + 1])
+                or (v == critical_path[j] and u == critical_path[j + 1])
+                for j in range(len(critical_path) - 1)
+            )
+            if is_in_path:
+                lines.append(f"    linkStyle {i} stroke:#ff4b4b,stroke-width:3px;")
+
+    return "\n".join(lines)
+
+
+def get_mermaid_sequence(df_gamme: pd.DataFrame) -> str:
+    """Génère la chronologie de la gamme d'usinage."""
+    lines = ["sequenceDiagram", "    autonumber"]
+
+    surfaces = pd.concat([df_gamme["surf_dep"], df_gamme["surf_arr"]]).unique()
+    for surf in surfaces:
+        lines.append(f"    participant {surf}")
+
+    for _, row in df_gamme.iterrows():
+        it = (
+            round(row.get("it_calcule", 0), 3)
+            if pd.notna(row.get("it_calcule"))
+            else "N/A"
+        )
+        lines.append(
+            f"    {row['surf_dep']}->>{row['surf_arr']}: {row['id']} (IT: {it})"
+        )
+
+    return "\n".join(lines)
 
 
 # ==========================================
@@ -163,9 +201,9 @@ init_data()
 
 st.title("⚙️ Anselmetti Studio : Transfert de Cotes")
 
-# -- ZONE D'ÉDITION DES DONNÉES --
+# -- 1. ZONE D'ÉDITION --
 st.header("1. Paramétrage (Édition libre)")
-tab1, tab2, tab3 = st.tabs(
+tab_res, tab_gamme, tab_client = st.tabs(
     [
         "🏭 Ressources (Machines/Outils)",
         "📋 Gamme d'Usinage (Cotes Fab)",
@@ -173,21 +211,21 @@ tab1, tab2, tab3 = st.tabs(
     ]
 )
 
-with tab1:
+with tab_res:
     res_edited = st.data_editor(
         st.session_state.df_ressources,
         num_rows="dynamic",
         key="ed_res",
         use_container_width=True,
     )
-with tab2:
+with tab_gamme:
     gamme_edited = st.data_editor(
         st.session_state.df_gamme,
         num_rows="dynamic",
         key="ed_gamme",
         use_container_width=True,
     )
-with tab3:
+with tab_client:
     client_edited = st.data_editor(
         st.session_state.df_client,
         num_rows="dynamic",
@@ -195,38 +233,27 @@ with tab3:
         use_container_width=True,
     )
 
-# -- CALCUL DUCKDB A LA VOLÉE --
-# DuckDB lit directement les variables res_edited et gamme_edited
-query = """
+# -- CALCUL DUCKDB --
+df_cf_dynamique = duckdb.query("""
     SELECT
-        g.id_cf as id,
-        g.surf_dep,
-        g.surf_arr,
-        g.nominale,
-        g.id_ressource,
-        (r.it_machine + r.it_outil) AS it_calcule
+        g.id_cf as id, g.surf_dep, g.surf_arr, g.nominale, g.id_ressource,
+        ROUND((r.it_machine + r.it_outil), 3) AS it_calcule
     FROM gamme_edited g
     LEFT JOIN res_edited r ON g.id_ressource = r.id_ressource
-"""
-df_cf_dynamique = duckdb.query(query).df()
+""").df()
 
 st.divider()
 
-# -- ZONE D'ANALYSE --
+# -- 2. ZONE D'ANALYSE & VISUALISATION --
 st.header("2. Analyse & Validation")
 G = build_graph(df_cf_dynamique)
-col_graph, col_analysis = st.columns([1, 1.2])
 
-with col_graph:
-    st.subheader("🕸️ Graphe de liaison")
-    if G.number_of_nodes() > 0:
-        components.html(get_pyvis_html(G), height=460)
-    else:
-        st.info("Graphe vide. Ajoutez des cotes de fabrication.")
+col_viz, col_analysis = st.columns([1.2, 1])
 
 with col_analysis:
-    st.subheader("🔍 Contrôle des Cotes Client")
+    st.subheader("🔍 Contrôle des Cotes")
 
+    active_path = None
     for _, cc_row in client_edited.iterrows():
         with st.expander(
             f"Analyse : {cc_row['id_cc']} ({cc_row['surf_A']} ➔ {cc_row['surf_B']})",
@@ -236,19 +263,43 @@ with col_analysis:
             result = analyze_chain(G, cc_row["surf_A"], cc_row["surf_B"])
 
             if result["success"]:
+                # Sauvegarde du dernier chemin réussi pour l'afficher sur le graphe
+                active_path = result["path"]
+
                 st.markdown(f"**Chemin :** `{' ➔ '.join(result['path'])}`")
-                st.caption(f"**Opérations :** {' + '.join(result['links'])}")
+                st.caption(f"**Détail :** {' + '.join(result['links'])}")
 
                 it_calc = result["sum_it"]
                 delta = round(it_max - it_calc, 4)
 
                 if it_calc <= it_max:
                     st.success(
-                        f"✅ **VALIDE** | IT Cumulé: **{it_calc} mm** (Max: {it_max} mm) | Marge: {delta} mm"
+                        f"✅ **VALIDE** | IT Cumulé: **{it_calc} mm** (Max: {it_max}) | Marge: {delta} mm"
                     )
                 else:
                     st.error(
-                        f"❌ **INVALIDE** | IT Cumulé: **{it_calc} mm** (Max: {it_max} mm) | Dépassement: {abs(delta)} mm"
+                        f"❌ **INVALIDE** | IT Cumulé: **{it_calc} mm** (Max: {it_max}) | Dépassement: {abs(delta)} mm"
                     )
             else:
                 st.warning(f"⚠️ {result['error']}")
+
+with col_viz:
+    tab_flow, tab_seq = st.tabs(["🕸️ Graphe Anselmetti", "⏱️ Diagramme de Séquence"])
+
+    with tab_flow:
+        st.caption(
+            "Le tracé vectoriel des transferts. Le dernier chemin analysé est surligné en rouge."
+        )
+        if G.number_of_nodes() > 0:
+            mermaid_flow = get_mermaid_flowchart(G, active_path)
+            st.markdown(f"```mermaid\n{mermaid_flow}\n```")
+        else:
+            st.info("Graphe vide.")
+
+    with tab_seq:
+        st.caption("Chronologie de la gamme d'usinage surface par surface.")
+        if not df_cf_dynamique.empty:
+            mermaid_seq = get_mermaid_sequence(df_cf_dynamique)
+            st.markdown(f"```mermaid\n{mermaid_seq}\n```")
+        else:
+            st.info("Gamme vide.")
