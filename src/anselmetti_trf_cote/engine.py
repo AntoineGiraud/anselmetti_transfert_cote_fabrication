@@ -120,7 +120,7 @@ def get_mermaid_flowchart(
     for node in G.nodes():
         if "Symetrie" in str(node):
             lines.append(
-                f'    {node}{{"{node}"}}\n    style {node} fill:#ff4b4b,color:#fff,stroke:#333'
+                f'    {node}{{"{node}"}}\n    style {node} fill:#2196f3,color:#fff,stroke:#333'
             )
         else:
             lines.append(f'    {node}["{node}"]')
@@ -159,7 +159,7 @@ def get_mermaid_sequence(df_cf: pd.DataFrame, failing_paths: list) -> str:
             )
             for path in failing_paths
         )
-        marker = "🔴 [A OPTIMISER] " if is_failing_op else ""
+        marker = "🔴 " if is_failing_op else ""
         seq_lines.append(
             f"    {row['surf_dep']}->>{row['surf_arr']}: {marker}{row['id']} (IT: {it})"
         )

@@ -4,6 +4,32 @@ Cette application numérise le calcul des transferts de cotes et des chaînes de
 
 L'outil s'appuie directement sur les méthodologies d'empilage vectoriel et de décomposition des cotes (cotes machines $C_m$, cotes outils $C_o$) enseignées dans le manuel de référence ***Guide du technicien en productique* (A. Chevalier & J. Bohan)**. L'enjeu métier est de garantir mathématiquement que la succession des opérations de retrait de matière respecte les intervalles de tolérance (IT) fonctionnels exigés par le plan client.
 
+## 📖 Concepts Métier (Méthode Anselmetti)
+* **IT (Intervalle de Tolérance) :** Marge d'erreur géométrique autorisée par l'usinage.
+* **CF (Cote de Fabrication) :** L'opération d'usinage physique reliant deux états de la matière.
+* **CC (Cote Condition) :** Le besoin fonctionnel client, validé si l'empilage des IT de fabrication reste inférieur à l'IT condition.
+
+## 🕸️ Tracé Vectoriel
+L'algorithme parcourt les Cotes de Fabrication pour relier les surfaces d'une Cote Condition :
+
+```mermaid
+graph LR
+    S_Brut_Gauche["S_Brut_Gauche"]
+    Plan_Symetrie{"Plan_Symetrie"}
+    style Plan_Symetrie fill:#2196f3,color:#fff,stroke:#333
+    S_Brut_Droite["S_Brut_Droite"]
+    S_Ext_Ebauche["S_Ext_Ebauche"]
+    S_Ext_Fini["S_Ext_Fini"]
+    S_Chanfrein["S_Chanfrein"]
+    S_Brut_Gauche -- "CF_Brut_G (0.8mm)" --- Plan_Symetrie
+    Plan_Symetrie -- "CF_Brut_D (0.8mm)" --- S_Brut_Droite
+    Plan_Symetrie -- "CF_Tour_Eb (0.1mm)" --- S_Ext_Ebauche
+    linkStyle 2 stroke:#ff4b4b,stroke-width:4px;
+    S_Ext_Ebauche -- "CF_Tour_Fin (0.03mm)" --- S_Ext_Fini
+    linkStyle 3 stroke:#ff4b4b,stroke-width:4px;
+    S_Ext_Fini -- "CF_Chanfrein (0.07mm)" --- S_Chanfrein
+```
+
 ## 🛠️ Stack Technique
 
 *   **uv** : Gestionnaire d'environnements et de dépendances Python ultra-rapide.
