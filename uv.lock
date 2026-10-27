@@ -24,7 +24,7 @@ wheels = [
 ]
 
 [[package]]
-name = "anselmetti-app"
+name = "anselmetti-trf-cote"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
@@ -40,7 +40,7 @@ requires-dist = [
     { name = "duckdb", specifier = ">=2.0.0" },
     { name = "marimo", specifier = ">=0.25.2" },
     { name = "networkx", specifier = ">=3.7" },
-    { name = "pandas", specifier = ">=2.1.0" },
+    { name = "pandas", specifier = ">=3.1.0" },
     { name = "streamlit", specifier = ">=1.66.1" },
 ]
 
