@@ -10,3 +10,4 @@ wheels/
 .venv
 lib/bindings/utils.js
 lib/
+__marimo__/
