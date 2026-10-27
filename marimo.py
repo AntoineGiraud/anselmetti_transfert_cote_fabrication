@@ -164,11 +164,11 @@ def logic_engine(duckdb, nx, pd, ui_gamme, ui_res):
 
 @app.cell(hide_code=True)
 def ui_analysis(G, mo, nx, ui_client):
-    # Cette cellule réagit aux changements du graphe ou des cotes client
     client_edited = ui_client.value
-
     results_ui = []
-    active_path = None
+
+    # NOUVEAU : On stocke une liste de tous les chemins invalides
+    failing_paths = []
 
     for _, cc_row in client_edited.iterrows():
         try:
@@ -180,31 +180,30 @@ def ui_analysis(G, mo, nx, ui_client):
 
             it_max = float(cc_row["it_max"])
             delta = round(it_max - sum_it, 4)
-            active_path = path  # on garde le dernier pour le surligner
 
-            # Formatage avec mo.callout pour un rendu visuel percutant
             if sum_it <= it_max:
                 kind = "success"
                 title = f"✅ {cc_row['id_cc']} : VALIDE"
-                detail = f"**IT Cumulé : {round(sum_it, 3)} mm** (Max toléré : {it_max} mm) | Marge de sécurité : {delta} mm"
+                detail = f"**IT Cumulé : {round(sum_it, 3)} mm** (Max toléré : {it_max} mm) | Marge : {delta} mm"
             else:
                 kind = "danger"
                 title = f"❌ {cc_row['id_cc']} : INVALIDE"
                 detail = f"**IT Cumulé : {round(sum_it, 3)} mm** (Max toléré : {it_max} mm) | Dépassement : {abs(delta)} mm"
 
+                # On sauvegarde ce chemin précis car il est en erreur
+                failing_paths.append(path)
+
             content = mo.md(f"""
             - **Chemin** : `{" ➔ ".join(path)}`
             - {detail}
             """)
-
-            # Ajout du callout à la liste
             results_ui.append(mo.callout(content, kind=kind, title=title))
 
         except nx.NetworkXNoPath:
             results_ui.append(
                 mo.callout(
                     mo.md(
-                        f"Aucun lien de fabrication continu entre `{cc_row['surf_A']}` et `{cc_row['surf_B']}`."
+                        f"Aucun lien continu entre `{cc_row['surf_A']}` et `{cc_row['surf_B']}`."
                     ),
                     kind="warn",
                     title=f"⚠️ {cc_row['id_cc']} : Chemin introuvable",
@@ -213,39 +212,48 @@ def ui_analysis(G, mo, nx, ui_client):
         except nx.NodeNotFound as e:
             results_ui.append(
                 mo.callout(
-                    mo.md(f"Surface manquante dans la gamme : {e}"),
+                    mo.md(f"Surface manquante : {e}"),
                     kind="warn",
-                    title=f"⚠️ {cc_row['id_cc']} : Erreur de surface",
+                    title=f"⚠️ {cc_row['id_cc']} : Erreur",
                 )
             )
 
-    # Affichage de la pile de résultats
-    mo.vstack(results_ui) if results_ui else mo.md("Aucune analyse.")
-    return (active_path,)
+    # L'astuce Marimo : on met le composant UI dans une variable,
+    # et on retourne les DEUX variables pour exporter la donnée ET l'affichage
+    analysis_output = mo.vstack(results_ui) if results_ui else mo.md("Aucune analyse.")
+    analysis_output
+    return (failing_paths,)
 
 
 @app.cell(hide_code=True)
-def render_mermaid(G, active_path, df_cf, mo, pd):
+def render_mermaid(G, df_cf, failing_paths, mo, pd):
     # Fonction de génération Flowchart
     lines = ["graph LR"]
-    for node in G.nodes():
-        if "Symetrie" in str(node):
-            lines.append(f'    {node}{{"{node}"}}')
-            lines.append(f"    style {node} fill:#ff4b4b,color:#fff,stroke:#333")
+    for _node in G.nodes():
+        if "Symetrie" in str(_node):
+            lines.append(f'    {_node}{{"{_node}"}}')
+            lines.append(f"    style {_node} fill:#ff4b4b,color:#fff,stroke:#333")
         else:
-            lines.append(f'    {node}["{node}"]')
+            lines.append(f'    {_node}["{_node}"]')
 
     edges_list = list(G.edges(data=True))
     for i, (u, v, data) in enumerate(edges_list):
         lines.append(f'    {u} -- "{data["label"]} ({data["it"]:.3g}mm)" --- {v}')
-        if active_path:
-            is_in_path = any(
-                (u == active_path[j] and v == active_path[j + 1])
-                or (v == active_path[j] and u == active_path[j + 1])
-                for j in range(len(active_path) - 1)
-            )
-            if is_in_path:
-                lines.append(f"    linkStyle {i} stroke:#ff4b4b,stroke-width:3px;")
+
+        # On vérifie si l'arête fait partie d'UN des chemins en erreur
+        is_failing = False
+        for _path in failing_paths:
+            if any(
+                (u == _path[j] and v == _path[j + 1])
+                or (v == _path[j] and u == _path[j + 1])
+                for j in range(len(_path) - 1)
+            ):
+                is_failing = True
+                break
+
+        # Si oui, on la colore en ROUGE
+        if is_failing:
+            lines.append(f"    linkStyle {i} stroke:#ff4b4b,stroke-width:4px;")
 
     mermaid_flow = "\n".join(lines)
 
@@ -254,24 +262,31 @@ def render_mermaid(G, active_path, df_cf, mo, pd):
     for surf in pd.concat([df_cf["surf_dep"], df_cf["surf_arr"]]).unique():
         seq_lines.append(f"    participant {surf}")
     for _, row in df_cf.iterrows():
-        it = (
-            round(row.get("it_calcule", 0), 3)
-            if pd.notna(row.get("it_calcule"))
-            else "N/A"
-        )
-        seq_lines.append(
-            f"    {row['surf_dep']}->>{row['surf_arr']}: {row['id']} (IT: {it})"
-        )
+        it = round(row.get("it_calcule", 0), 3) if pd.notna(row.get("it_calcule")) else "N/A"
+
+        # Vérification : cette opération appartient-elle à une chaîne en erreur ?
+        is_failing_op = False
+        for _path in failing_paths:
+            if any((row['surf_dep'] == _path[j] and row['surf_arr'] == _path[j + 1]) or
+                   (row['surf_arr'] == _path[j] and row['surf_dep'] == _path[j + 1])
+                   for j in range(len(_path) - 1)):
+                is_failing_op = True
+                break
+
+        # Ajout du marqueur visuel sur le libellé de la flèche
+        marker = "🔴 " if is_failing_op else ""
+        seq_lines.append(f"    {row['surf_dep']}->>{row['surf_arr']}: {marker}{row['id']} (IT: {it})")
 
     mermaid_seq = "\n".join(seq_lines)
 
-    # Rendu final Mermaid
-    mo.ui.tabs(
+    # CORRECTION MARIMO : On retourne directement l'objet UI sans mot-clé `return` vide à la fin
+    mermaid_ui = mo.ui.tabs(
         {
             "🕸️ Anselmetti": mo.mermaid(f"{mermaid_flow}"),
             "⏱️ Séquence": mo.mermaid(f"{mermaid_seq}"),
         }
     )
+    mermaid_ui
     return
 
 
