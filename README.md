@@ -46,10 +46,18 @@ Prérequis : Avoir installé `uv` sur sa machine.
 ```bash
 # 1. Synchroniser l'environnement et installer les dépendances (pandas, networkx, duckdb, marimo, streamlit)
 uv sync
+```
 
+### Version marimo (version web WASM sans serveur)
+```bash
 # 2. Lancer l'application en mode Marimo (Version principale)
 uv run marimo edit app_marimo.py
+```
+![img_app_marimo](./docs/img_app_marimo.png)
 
+### Version streamlit (Serveur web requis)
+```bash
 # 3. (Alternative) Lancer l'application en mode Streamlit si le prototype a été conservé
 uv run streamlit run app_streamlit.py
 ```
+![img_app_streamlit](./docs/img_app_streamlit.png)
