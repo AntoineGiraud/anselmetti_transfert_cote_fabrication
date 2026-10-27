@@ -1,11 +1,9 @@
 [project]
-name = "anselmetti-app"
+name = "anselmetti-trf-cote"
 version = "0.1.0"
-description = "Add your description here"
+description = "App calcul transfert côtes de fabrication - méthode Anselmetti"
 readme = "README.md"
-authors = [
-    { name = "AntoineGiraud", email = "antoine.giraud@outlook.com" }
-]
+authors = [{ name = "AntoineGiraud", email = "antoine.giraud@outlook.com" }]
 requires-python = ">=3.14"
 dependencies = [
     "duckdb>=2.0.0",

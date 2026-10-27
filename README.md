@@ -48,7 +48,7 @@ Prérequis : Avoir installé `uv` sur sa machine.
 uv sync
 
 # 2. Lancer l'application en mode Marimo (Version principale)
-uv run marimo edit app.py
+uv run marimo edit app_marimo.py
 
 # 3. (Alternative) Lancer l'application en mode Streamlit si le prototype a été conservé
 uv run streamlit run app_streamlit.py

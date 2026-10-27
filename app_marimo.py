@@ -7,10 +7,13 @@ app = marimo.App(width="full")
 @app.cell(hide_code=True)
 def imports():
     import marimo as mo
+    # Déclaration explicite pour forcer Pyodide à télécharger les paquets en WASM
+    import pandas as pd
     import networkx as nx
-    from src.anselmetti_trf_cote import engine
+    import duckdb
 
-    return engine, mo, nx
+    from src.anselmetti_trf_cote import engine
+    return engine, mo, nx, pd, duckdb
 
 
 @app.cell(hide_code=True)
@@ -24,11 +27,13 @@ def _(mo):
 @app.cell(hide_code=True)
 def lexique(mo):
     mo.callout(
-    mo.md("""**📖 Lexique métier :**
+        mo.md("""**📖 Lexique métier :**
     - **IT (Intervalle de Tolérance)** : Marge d'erreur géométrique acceptable.
     - **CF (Cote de Fabrication)** : Dimension réalisée physiquement par la machine.
     - **CC (Cote Condition)** : Exigence finale du plan client à vérifier.
-    """), kind="info",)
+    """),
+        kind="info",
+    )
     return
 
 
